@@ -1,6 +1,26 @@
 <?php
 if ( ! defined( 'ABSPATH' ) ) exit;
 
+// --- Preview tunnel: noindex while cloud link is active ----------------------------
+
+add_action( 'wp_head', 'ecs_preview_noindex', 0 );
+function ecs_preview_noindex() {
+	if ( ! defined( 'ECS_PREVIEW_TUNNEL' ) || ! ECS_PREVIEW_TUNNEL ) {
+		return;
+	}
+
+	echo '<meta name="robots" content="noindex, nofollow">' . "\n";
+}
+
+add_filter( 'robots_txt', 'ecs_preview_robots_txt', 99, 2 );
+function ecs_preview_robots_txt( $output, $public ) {
+	if ( defined( 'ECS_PREVIEW_TUNNEL' ) && ECS_PREVIEW_TUNNEL ) {
+		return "User-agent: *\nDisallow: /\n";
+	}
+
+	return $output;
+}
+
 // --- Enqueue parent + child styles ------------------------------------------------
 
 add_action( 'wp_enqueue_scripts', 'ecs_enqueue_styles' );
@@ -39,6 +59,31 @@ function ecs_enqueue_tracking() {
         (string) filemtime( $path ),
         true
     );
+}
+
+// --- S1-14: Google Consent Mode v2 defaults ----------------------------------------
+// Fires at priority 0 (before GTM at priority 1).
+// Sets all consent states to 'denied' by default so analytics/ads fire only after
+// the user accepts via CookieYes. CookieYes updates these on accept/decline when
+// Consent Mode is enabled in: CookieYes → Settings → Integrations → Google Consent Mode.
+// Reference: https://developers.google.com/tag-platform/security/guides/consent
+
+add_action( 'wp_head', 'ecs_consent_mode_defaults', 0 );
+function ecs_consent_mode_defaults() {
+    ?>
+<script>
+window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('consent', 'default', {
+    'analytics_storage':  'denied',
+    'ad_storage':         'denied',
+    'ad_user_data':       'denied',
+    'ad_personalization': 'denied',
+    'wait_for_update':    500
+});
+gtag('set', 'url_passthrough', true);
+</script>
+    <?php
 }
 
 // --- P4-01: Google Tag Manager (inactive until ECS_GTM_ID is set) -----------------
@@ -83,6 +128,48 @@ function ecs_gtm_body() {
 <noscript><iframe src="https://www.googletagmanager.com/ns.html?id=<?php echo $id; ?>"
 height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
 <!-- End Google Tag Manager (noscript) -->
+    <?php
+}
+
+// --- CRO-01: Meta (Facebook) Pixel (inactive until ECS_META_PIXEL_ID is set) -------
+// Define in wp-config.php: define( 'ECS_META_PIXEL_ID', '1234567890' );
+// Respects Consent Mode: only fires after ad_storage is granted via CookieYes.
+
+function ecs_meta_pixel_id() {
+    $id = defined( 'ECS_META_PIXEL_ID' ) ? ECS_META_PIXEL_ID : '';
+    return apply_filters( 'ecs_meta_pixel_id', $id );
+}
+
+function ecs_meta_pixel_is_configured() {
+    $id = ecs_meta_pixel_id();
+    return $id && preg_match( '/^\d{8,20}$/', (string) $id );
+}
+
+add_action( 'wp_head', 'ecs_meta_pixel_head', 2 );
+function ecs_meta_pixel_head() {
+    if ( ! ecs_meta_pixel_is_configured() ) {
+        return;
+    }
+
+    $id = esc_js( ecs_meta_pixel_id() );
+    ?>
+<!-- Meta Pixel -->
+<script>
+!function(f,b,e,v,n,t,s)
+{if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+n.queue=[];t=b.createElement(e);t.async=!0;
+t.src=v;s=b.getElementsByTagName(e)[0];
+s.parentNode.insertBefore(t,s)}(window,document,'script',
+'https://connect.facebook.net/en_US/fbevents.js');
+fbq('consent', 'revoke');
+fbq('init', '<?php echo $id; ?>');
+fbq('track', 'PageView');
+</script>
+<noscript><img height="1" width="1" style="display:none"
+src="https://www.facebook.com/tr?id=<?php echo esc_attr( ecs_meta_pixel_id() ); ?>&ev=PageView&noscript=1"/></noscript>
+<!-- End Meta Pixel -->
     <?php
 }
 

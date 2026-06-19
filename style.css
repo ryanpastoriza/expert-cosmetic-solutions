@@ -48,8 +48,8 @@ Text Domain: hello-elementor-child
     }
 }
 
-/* ─── UX-03: Suppress duplicate nav if double-rendered ─── */
-/* This hides any extra header-footer-elementor nav that duplicates the primary */
-.hfe-nav-menu ~ .hfe-nav-menu {
-    display: none;
-}
+/* ─── UX-03: Resolved at HFE source ─── */
+/* The two header nav widgets are responsive variants (desktop: hidden-tablet/mobile,
+   mobile: hidden-desktop), not a true duplicate. The desktop widget previously
+   referenced a non-existent "company" menu; it now uses "main-menu" like mobile.
+   The former `.hfe-nav-menu ~ .hfe-nav-menu` display:none mask is retired. */
