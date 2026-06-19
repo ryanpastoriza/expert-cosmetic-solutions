@@ -1,0 +1,55 @@
+/*
+Theme Name: Hello Elementor Child
+Template:   hello-elementor
+Version:    1.0.0
+Description: Expert Cosmetic Solutions child theme — audit fixes
+Text Domain: hello-elementor-child
+*/
+
+/* ─── UX-04: Hero button layout on 375–767px ─── */
+@media (max-width: 767px) {
+    .elementor-widget-button .elementor-button {
+        white-space: normal;
+        word-break: break-word;
+        padding: 12px 20px;
+        min-width: 0;
+        max-width: 100%;
+        display: inline-block;
+    }
+
+    /* When two hero buttons sit side-by-side, stack them */
+    .elementor-widget-button + .elementor-widget-button {
+        margin-top: 10px;
+    }
+
+    .elementor-button-wrapper {
+        text-align: center;
+    }
+}
+
+/* ─── UX-05: Instagram feed — 3 cols on mobile (was 5) ─── */
+@media (max-width: 767px) {
+    /* Smash Balloon */
+    #sb_instagram .sbi_photo_wrap,
+    #sb_instagram.sbi_col_5 .sbi_photo_wrap,
+    #sb_instagram.sbi_col_4 .sbi_photo_wrap {
+        width: 33.33% !important;
+    }
+
+    /* Elfsight Instagram Feed */
+    .eapps-instagram-feed-posts-grid {
+        grid-template-columns: repeat(3, 1fr) !important;
+    }
+
+    /* Spotlight / 10Web */
+    .instagram-feed .instagram-feed__photos,
+    .twbb_instagram-feed_layout {
+        grid-template-columns: repeat(3, 1fr) !important;
+    }
+}
+
+/* ─── UX-03: Suppress duplicate nav if double-rendered ─── */
+/* This hides any extra header-footer-elementor nav that duplicates the primary */
+.hfe-nav-menu ~ .hfe-nav-menu {
+    display: none;
+}
