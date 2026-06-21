@@ -13,8 +13,11 @@ Text Domain: hello-elementor-child
         word-break: break-word;
         padding: 12px 20px;
         min-width: 0;
+        min-height: 44px;
         max-width: 100%;
-        display: inline-block;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
     }
 
     /* When two hero buttons sit side-by-side, stack them */
@@ -53,3 +56,43 @@ Text Domain: hello-elementor-child
    mobile: hidden-desktop), not a true duplicate. The desktop widget previously
    referenced a non-existent "company" menu; it now uses "main-menu" like mobile.
    The former `.hfe-nav-menu ~ .hfe-nav-menu` display:none mask is retired. */
+
+/* ─── Blog + classic content pages: match ECS typography ─── */
+.single-post .entry-content,
+.page:not(.elementor-page) .entry-content {
+    font-family: Montserrat, sans-serif;
+    font-size: 1.0625rem;
+    line-height: 1.6;
+    color: #113856;
+    max-width: 720px;
+    margin-left: auto;
+    margin-right: auto;
+    padding: 2rem 1.25rem 3rem;
+}
+
+.single-post .entry-content h1,
+.page:not(.elementor-page) .entry-content h1 {
+    font-size: clamp(1.75rem, 4vw, 2.25rem);
+    font-weight: 700;
+    color: #113856;
+    margin-bottom: 1rem;
+}
+
+.single-post .entry-content h2,
+.page:not(.elementor-page) .entry-content h2 {
+    font-size: 1.35rem;
+    font-weight: 700;
+    margin-top: 2rem;
+    margin-bottom: 0.75rem;
+    color: #113856;
+}
+
+.single-post .entry-content p,
+.page:not(.elementor-page) .entry-content p {
+    margin-bottom: 1rem;
+}
+
+.single-post .entry-content ul,
+.page:not(.elementor-page) .entry-content ul {
+    margin: 0 0 1rem 1.25rem;
+}
