@@ -187,43 +187,118 @@ add_filter( 'rank_math/opengraph/output/locale', function() {
     return 'en_AU';
 } );
 
-// --- PERF-04: Load Google Fonts non-blocking --------------------------------------
-// Retire once Autoptimize or OMGF handles fonts (P3-04).
+// --- PERF-04: Local Google Fonts via OMGF (fonts self-hosted; theme preload filters retired P3-04) ---
 
-add_action( 'wp_head', 'ecs_google_fonts_preconnect', 1 );
-function ecs_google_fonts_preconnect() {
-    echo '<link rel="preconnect" href="https://fonts.googleapis.com">' . "\n";
-    echo '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>' . "\n";
+// --- PERF-02: Serve WebP sidecars when a .webp file exists (page-cache safe) --------
+
+add_action( 'wp_head', 'ecs_preload_lcp_hero', 2 );
+function ecs_preload_lcp_hero() {
+	if ( ! is_front_page() ) {
+		return;
+	}
+
+	// Use imagesrcset + imagesizes so the browser picks the same source it
+	// selects from the <img> srcset, avoiding a wasted download on desktop.
+	$srcset = wp_get_attachment_image_srcset( 529, 'large' );
+	$sizes  = wp_get_attachment_image_sizes( 529, 'large' );
+
+	if ( ! $srcset || ! $sizes ) {
+		// Fallback: single-URL preload for the large size.
+		$hero_url = wp_get_attachment_image_url( 529, 'large' );
+		if ( ! $hero_url ) {
+			return;
+		}
+		echo '<link rel="preload" as="image" href="' . esc_url( ecs_url_to_webp( $hero_url ) ) . '" fetchpriority="high">' . "\n";
+		return;
+	}
+
+	// Rewrite each URL in the srcset to its .webp sidecar when available.
+	$webp_srcset = preg_replace_callback(
+		'/(\S+\.(?:jpe?g|png))(\s+\d+[wx])/i',
+		function ( $m ) {
+			return esc_url( ecs_url_to_webp( $m[1] ) ) . $m[2];
+		},
+		$srcset
+	) ?? $srcset;
+
+	echo '<link rel="preload" as="image" imagesrcset="' . esc_attr( $webp_srcset ) . '" imagesizes="' . esc_attr( $sizes ) . '" fetchpriority="high">' . "\n";
 }
 
-add_filter( 'style_loader_tag', 'ecs_async_google_fonts', 10, 4 );
-function ecs_async_google_fonts( $html, $handle, $href, $media ) {
-    if ( strpos( $href, 'fonts.googleapis.com' ) === false ) {
-        return $html;
-    }
+function ecs_upload_path_for_url( $url ) {
+	$uploads = wp_get_upload_dir();
 
-    $async = str_replace(
-        "rel='stylesheet'",
-        "rel='preload' as='style' onload=\"this.onload=null;this.rel='stylesheet'\"",
-        $html
-    );
+	if ( empty( $uploads['baseurl'] ) || empty( $uploads['basedir'] ) ) {
+		return '';
+	}
 
-    return $async . '<noscript>' . $html . '</noscript>';
+	$path      = wp_parse_url( $url, PHP_URL_PATH );
+	$base_path = wp_parse_url( $uploads['baseurl'], PHP_URL_PATH );
+
+	if ( ! $path || ! $base_path || 0 !== strpos( $path, $base_path ) ) {
+		return '';
+	}
+
+	$relative = substr( $path, strlen( $base_path ) );
+
+	return wp_normalize_path( $uploads['basedir'] . $relative );
+}
+
+function ecs_url_to_webp( $url ) {
+	if ( ! preg_match( '/\.(jpe?g|png)(\?.*)?$/i', $url ) ) {
+		return $url;
+	}
+
+	$webp_url  = preg_replace( '/\.(jpe?g|png)(\?.*)?$/i', '.webp$2', $url );
+	$webp_path = ecs_upload_path_for_url( strtok( $webp_url, '?' ) );
+
+	if ( $webp_path && is_file( $webp_path ) ) {
+		return $webp_url;
+	}
+
+	return $url;
+}
+
+function ecs_replace_img_webp_sources( $html ) {
+	// Guard: preg_replace_callback returns null on PCRE error; fall back to $html.
+	$result = preg_replace_callback(
+		'/\ssrc=(["\'])([^"\']+)\1/i',
+		function ( $matches ) {
+			return ' src=' . $matches[1] . esc_url( ecs_url_to_webp( $matches[2] ) ) . $matches[1];
+		},
+		$html
+	);
+	$html = $result ?? $html;
+
+	$result = preg_replace_callback(
+		'/\ssrcset=(["\'])([^"\']+)\1/i',
+		function ( $matches ) {
+			$parts   = array_map( 'trim', explode( ',', $matches[2] ) );
+			$updated = array();
+
+			foreach ( $parts as $part ) {
+				if ( preg_match( '/^(\S+)\s+(.+)$/', $part, $piece ) ) {
+					$updated[] = esc_url( ecs_url_to_webp( $piece[1] ) ) . ' ' . $piece[2];
+				} else {
+					$updated[] = esc_url( ecs_url_to_webp( $part ) );
+				}
+			}
+
+			return ' srcset=' . $matches[1] . implode( ', ', $updated ) . $matches[1];
+		},
+		$html
+	);
+
+	return $result ?? $html;
 }
 
 // --- P3-03 / PERF-05: Lazy-load below-fold images only -----------------------------
 // Logos (1-2): eager. LCP hero (3): eager + fetchpriority high. Rest: lazy.
 
 function ecs_strip_image_loading_attrs( $html ) {
-    while ( preg_match( '/\sloading=(["\']).*?\1/i', $html ) ) {
-        $html = preg_replace( '/\sloading=(["\']).*?\1/i', '', $html, 1 );
-    }
-
-    while ( preg_match( '/\sfetchpriority=(["\']).*?\1/i', $html ) ) {
-        $html = preg_replace( '/\sfetchpriority=(["\']).*?\1/i', '', $html, 1 );
-    }
-
-    return $html;
+	// Replace all occurrences in a single pass (no loop needed).
+	$html = preg_replace( '/\sloading=(["\']).*?\1/i', '', $html ) ?? $html;
+	$html = preg_replace( '/\sfetchpriority=(["\']).*?\1/i', '', $html ) ?? $html;
+	return $html;
 }
 
 function ecs_apply_image_loading_attrs( $html, $position ) {
@@ -244,26 +319,249 @@ function ecs_apply_image_loading_attrs( $html, $position ) {
     return str_replace( '<img ', '<img loading="lazy" ', $html );
 }
 
+// --- SEO-07: Consolidate duplicate FAQPage JSON-LD (PERF-02 output buffer) ---------
+
+function ecs_schema_node_is_type( $node, $type ) {
+	if ( ! is_array( $node ) || ! isset( $node['@type'] ) ) {
+		return false;
+	}
+
+	$types = is_array( $node['@type'] ) ? $node['@type'] : array( $node['@type'] );
+
+	return in_array( $type, $types, true );
+}
+
+function ecs_schema_contains_faqpage( $data ) {
+	if ( ! is_array( $data ) ) {
+		return false;
+	}
+
+	if ( ecs_schema_node_is_type( $data, 'FAQPage' ) ) {
+		return true;
+	}
+
+	if ( ! empty( $data['@graph'] ) && is_array( $data['@graph'] ) ) {
+		foreach ( $data['@graph'] as $node ) {
+			if ( ecs_schema_node_is_type( $node, 'FAQPage' ) ) {
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
+function ecs_extract_faq_main_entities( $data ) {
+	$entities = array();
+
+	if ( ! is_array( $data ) ) {
+		return $entities;
+	}
+
+	if ( ecs_schema_node_is_type( $data, 'FAQPage' ) && ! empty( $data['mainEntity'] ) && is_array( $data['mainEntity'] ) ) {
+		$entities = array_merge( $entities, $data['mainEntity'] );
+	}
+
+	if ( ! empty( $data['@graph'] ) && is_array( $data['@graph'] ) ) {
+		foreach ( $data['@graph'] as $node ) {
+			if ( ecs_schema_node_is_type( $node, 'FAQPage' ) && ! empty( $node['mainEntity'] ) && is_array( $node['mainEntity'] ) ) {
+				$entities = array_merge( $entities, $node['mainEntity'] );
+			}
+		}
+	}
+
+	return $entities;
+}
+
+function ecs_faq_question_key( $entity ) {
+	if ( ! is_array( $entity ) || empty( $entity['name'] ) ) {
+		return '';
+	}
+
+	return strtolower( trim( wp_strip_all_tags( (string) $entity['name'] ) ) );
+}
+
+function ecs_merge_faq_entities( array $entities ) {
+	$merged = array();
+	$seen   = array();
+
+	foreach ( $entities as $entity ) {
+		$key = ecs_faq_question_key( $entity );
+
+		if ( '' !== $key && isset( $seen[ $key ] ) ) {
+			continue;
+		}
+
+		if ( '' !== $key ) {
+			$seen[ $key ] = true;
+		}
+
+		$merged[] = $entity;
+	}
+
+	return $merged;
+}
+
+function ecs_apply_merged_faq_entities( array $data, array $merged ) {
+	if ( ecs_schema_node_is_type( $data, 'FAQPage' ) ) {
+		$data['mainEntity'] = $merged;
+		return $data;
+	}
+
+	if ( empty( $data['@graph'] ) || ! is_array( $data['@graph'] ) ) {
+		return $data;
+	}
+
+	$found     = false;
+	$new_graph = array();
+
+	foreach ( $data['@graph'] as $node ) {
+		if ( ecs_schema_node_is_type( $node, 'FAQPage' ) ) {
+			if ( ! $found ) {
+				$node['mainEntity'] = $merged;
+				$new_graph[]        = $node;
+				$found              = true;
+			}
+			continue;
+		}
+
+		$new_graph[] = $node;
+	}
+
+	if ( $found ) {
+		$data['@graph'] = $new_graph;
+	}
+
+	return $data;
+}
+
+function ecs_build_faq_schema_script_tag( $full_script_tag, $json ) {
+	if ( preg_match( '/^<script\b[^>]*>/is', $full_script_tag, $open_match ) ) {
+		return $open_match[0] . $json . '</script>';
+	}
+
+	return '<script type="application/ld+json">' . $json . '</script>';
+}
+
+function ecs_consolidate_faq_schema( $html ) {
+	if ( false === strpos( $html, 'FAQPage' ) ) {
+		return $html;
+	}
+
+	$pattern = '/<script\b[^>]*\btype=(["\'])application\/ld\+json\1[^>]*>(.*?)<\/script>/is';
+
+	if ( ! preg_match_all( $pattern, $html, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE ) ) {
+		return $html;
+	}
+
+	$faq_blocks = array();
+
+	foreach ( $matches as $match ) {
+		$json_text = trim( $match[2][0] );
+		$data      = json_decode( $json_text, true );
+
+		if ( JSON_ERROR_NONE !== json_last_error() || ! ecs_schema_contains_faqpage( $data ) ) {
+			continue;
+		}
+
+		$faq_blocks[] = array(
+			'full'       => $match[0][0],
+			'full_start' => $match[0][1],
+			'full_len'   => strlen( $match[0][0] ),
+			'data'       => $data,
+		);
+	}
+
+	if ( count( $faq_blocks ) <= 1 ) {
+		return $html;
+	}
+
+	$all_entities = array();
+
+	foreach ( $faq_blocks as $block ) {
+		$all_entities = array_merge( $all_entities, ecs_extract_faq_main_entities( $block['data'] ) );
+	}
+
+	$merged_entities = ecs_merge_faq_entities( $all_entities );
+	$keeper          = ecs_apply_merged_faq_entities( $faq_blocks[0]['data'], $merged_entities );
+	$keeper_json     = wp_json_encode( $keeper, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE );
+
+	if ( false === $keeper_json ) {
+		return $html;
+	}
+
+	$replacement  = ecs_build_faq_schema_script_tag( $faq_blocks[0]['full'], $keeper_json );
+	$replacements = array(
+		array(
+			'start' => $faq_blocks[0]['full_start'],
+			'end'   => $faq_blocks[0]['full_start'] + $faq_blocks[0]['full_len'],
+			'text'  => $replacement,
+		),
+	);
+
+	for ( $i = 1, $count = count( $faq_blocks ); $i < $count; $i++ ) {
+		$replacements[] = array(
+			'start' => $faq_blocks[ $i ]['full_start'],
+			'end'   => $faq_blocks[ $i ]['full_start'] + $faq_blocks[ $i ]['full_len'],
+			'text'  => '',
+		);
+	}
+
+	usort(
+		$replacements,
+		function ( $a, $b ) {
+			return $b['start'] - $a['start'];
+		}
+	);
+
+	foreach ( $replacements as $rep ) {
+		$html = substr_replace( $html, $rep['text'], $rep['start'], $rep['end'] - $rep['start'] );
+	}
+
+	return $html;
+}
+
 function ecs_optimize_final_html_images( $html ) {
-    if ( false === strpos( $html, '<img' ) ) {
-        return $html;
-    }
+	// Guard: ob_start callback returning null causes PHP to send an empty body
+	// (null coerces to ""), which drops the response. Always return a string.
+	if ( ! is_string( $html ) ) {
+		return '';
+	}
+
+	if ( function_exists( 'ecs_preview_upgrade_http_urls' ) ) {
+		$html = ecs_preview_upgrade_http_urls( $html );
+	}
+
+	$html = ecs_consolidate_faq_schema( $html );
+
+	if ( false === strpos( $html, '<img' ) ) {
+		return $html;
+	}
 
     $index = 0;
 
-    return preg_replace_callback(
+    // preg_replace_callback returns null on PCRE error — fall back to original HTML
+    // so the ob_start buffer is never silently discarded.
+    $result = preg_replace_callback(
         '/<img\b[^>]*>/i',
         function ( $matches ) use ( &$index ) {
             $index++;
-            return ecs_apply_image_loading_attrs( $matches[0], $index );
+            $tag = ecs_replace_img_webp_sources( $matches[0] );
+            return ecs_apply_image_loading_attrs( $tag, $index );
         },
         $html
     );
+
+    return $result ?? $html;
 }
 
 add_action( 'template_redirect', 'ecs_start_image_output_buffer', 0 );
 function ecs_start_image_output_buffer() {
-    if ( is_admin() || wp_doing_ajax() || wp_is_json_request() || is_feed() ) {
+    // Skip for admin, AJAX, JSON, feeds, and 404 pages.
+    // On 404 pages the ob_start callback could fail (PCRE on large error templates)
+    // and return null, which causes PHP to send an empty body → connection closed.
+    // Image optimisation on 404 pages is not worth the risk.
+    if ( is_admin() || wp_doing_ajax() || wp_is_json_request() || is_feed() || is_404() ) {
         return;
     }
 

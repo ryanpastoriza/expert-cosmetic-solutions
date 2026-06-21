@@ -13,6 +13,7 @@ WordPress child theme for [expertcosmeticsolutions.com.au](https://expertcosmeti
 | P3-03 | Lazy-load below-fold images only (output buffer) |
 | SEO-01 | Locale `en_AU` |
 | SEO-06 | Instagram embed locale |
+| SEO-07 | FAQPage JSON-LD consolidation (PERF-02 output buffer) |
 | PERF-04 | Google Fonts non-blocking |
 | UX-04 | Hero button layout (375–767px) |
 | UX-05 | Instagram feed 3-col mobile |
