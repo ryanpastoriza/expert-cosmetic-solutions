@@ -34,11 +34,13 @@ function ecs_enqueue_styles() {
         $parent_version
     );
 
+    $child = get_stylesheet_directory() . '/style.css';
+
     wp_enqueue_style(
         'ecs-child-style',
         get_stylesheet_uri(),
         [ 'hello-elementor-style' ],
-        '1.0.0'
+        file_exists( $child ) ? (string) filemtime( $child ) : '1.0.0'
     );
 }
 
@@ -70,6 +72,10 @@ function ecs_enqueue_tracking() {
 
 add_action( 'wp_head', 'ecs_consent_mode_defaults', 0 );
 function ecs_consent_mode_defaults() {
+    if ( ! ecs_gtm_is_configured() && ! ecs_meta_pixel_is_configured() ) {
+        return;
+    }
+
     ?>
 <script>
 window.dataLayer = window.dataLayer || [];
@@ -180,7 +186,7 @@ function ecs_fix_locale( $locale ) {
     if ( is_admin() ) {
         return $locale;
     }
-    return 'en_AU';
+    return apply_filters( 'ecs_frontend_locale', 'en_AU' );
 }
 
 add_filter( 'rank_math/opengraph/output/locale', function() {
@@ -191,20 +197,38 @@ add_filter( 'rank_math/opengraph/output/locale', function() {
 
 // --- PERF-02: Serve WebP sidecars when a .webp file exists (page-cache safe) --------
 
+function ecs_lcp_hero_id() {
+	return (int) apply_filters( 'ecs_lcp_hero_id', 529 );
+	// 529 = current Home (page 11) hero attachment; override via the 'ecs_lcp_hero_id' filter.
+}
+
+function ecs_lcp_hero_basename() {
+	$id   = ecs_lcp_hero_id();
+	$file = $id ? get_attached_file( $id ) : '';
+
+	return $file ? pathinfo( $file, PATHINFO_FILENAME ) : '';
+}
+
 add_action( 'wp_head', 'ecs_preload_lcp_hero', 2 );
 function ecs_preload_lcp_hero() {
 	if ( ! is_front_page() ) {
 		return;
 	}
 
+	$hero_id = ecs_lcp_hero_id();
+
+	if ( ! $hero_id ) {
+		return;
+	}
+
 	// Use imagesrcset + imagesizes so the browser picks the same source it
 	// selects from the <img> srcset, avoiding a wasted download on desktop.
-	$srcset = wp_get_attachment_image_srcset( 529, 'large' );
-	$sizes  = wp_get_attachment_image_sizes( 529, 'large' );
+	$srcset = wp_get_attachment_image_srcset( $hero_id, 'large' );
+	$sizes  = wp_get_attachment_image_sizes( $hero_id, 'large' );
 
 	if ( ! $srcset || ! $sizes ) {
 		// Fallback: single-URL preload for the large size.
-		$hero_url = wp_get_attachment_image_url( 529, 'large' );
+		$hero_url = wp_get_attachment_image_url( $hero_id, 'large' );
 		if ( ! $hero_url ) {
 			return;
 		}
@@ -292,7 +316,7 @@ function ecs_replace_img_webp_sources( $html ) {
 }
 
 // --- P3-03 / PERF-05: Lazy-load below-fold images only -----------------------------
-// Logos (1-2): eager. LCP hero (3): eager + fetchpriority high. Rest: lazy.
+// LCP hero: eager + fetchpriority high (matched by attachment basename). Rest: lazy.
 
 function ecs_strip_image_loading_attrs( $html ) {
 	// Replace all occurrences in a single pass (no loop needed).
@@ -301,19 +325,11 @@ function ecs_strip_image_loading_attrs( $html ) {
 	return $html;
 }
 
-function ecs_apply_image_loading_attrs( $html, $position ) {
+function ecs_apply_image_loading_attrs( $html, $is_hero ) {
     $html = ecs_strip_image_loading_attrs( $html );
 
-    if ( $position <= 2 ) {
-        return str_replace( '<img ', '<img loading="eager" ', $html );
-    }
-
-    if ( 3 === $position ) {
-        return str_replace(
-            '<img ',
-            '<img loading="eager" fetchpriority="high" ',
-            $html
-        );
+    if ( $is_hero ) {
+        return str_replace( '<img ', '<img loading="eager" fetchpriority="high" ', $html );
     }
 
     return str_replace( '<img ', '<img loading="lazy" ', $html );
@@ -538,16 +554,17 @@ function ecs_optimize_final_html_images( $html ) {
 		return $html;
 	}
 
-    $index = 0;
+    $hero = ecs_lcp_hero_basename();
 
     // preg_replace_callback returns null on PCRE error — fall back to original HTML
     // so the ob_start buffer is never silently discarded.
     $result = preg_replace_callback(
         '/<img\b[^>]*>/i',
-        function ( $matches ) use ( &$index ) {
-            $index++;
-            $tag = ecs_replace_img_webp_sources( $matches[0] );
-            return ecs_apply_image_loading_attrs( $tag, $index );
+        function ( $matches ) use ( $hero ) {
+            $tag     = ecs_replace_img_webp_sources( $matches[0] );
+            $is_hero = ( '' !== $hero && false !== stripos( $tag, $hero ) );
+
+            return ecs_apply_image_loading_attrs( $tag, $is_hero );
         },
         $html
     );

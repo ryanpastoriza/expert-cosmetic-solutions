@@ -28,6 +28,21 @@
 		return text.substring( 0, 80 );
 	}
 
+	var bookingHosts = window.ECS_BOOKING_HOSTS || [
+		'bookings.gettimely.com',
+		'book.gettimely.com',
+	];
+
+	function isBookingHref( href ) {
+		var i;
+		for ( i = 0; i < bookingHosts.length; i++ ) {
+			if ( href.indexOf( bookingHosts[ i ] ) !== -1 ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	document.addEventListener( 'click', function ( e ) {
 		var link = e.target.closest( 'a' );
 		if ( ! link ) {
@@ -56,7 +71,7 @@
 			return;
 		}
 
-		if ( /bookings\.gettimely\.com|book\.gettimely\.com/i.test( href ) ) {
+		if ( isBookingHref( href ) ) {
 			pushEvent( 'booking_click', {
 				link_url: href,
 				link_text: linkLabel( link ),
