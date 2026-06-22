@@ -554,14 +554,22 @@ function ecs_optimize_final_html_images( $html ) {
 		return $html;
 	}
 
-    $hero = ecs_lcp_hero_basename();
+    $hero  = ecs_lcp_hero_basename();
+    $front = is_front_page();
 
     // preg_replace_callback returns null on PCRE error — fall back to original HTML
     // so the ob_start buffer is never silently discarded.
+    // Only the front page gets the eager/lazy rewrite (hero matched by basename); inner
+    // pages keep WP core's own loading/fetchpriority attrs untouched (CR-1).
     $result = preg_replace_callback(
         '/<img\b[^>]*>/i',
-        function ( $matches ) use ( $hero ) {
-            $tag     = ecs_replace_img_webp_sources( $matches[0] );
+        function ( $matches ) use ( $hero, $front ) {
+            $tag = ecs_replace_img_webp_sources( $matches[0] );
+
+            if ( ! $front ) {
+                return $tag;
+            }
+
             $is_hero = ( '' !== $hero && false !== stripos( $tag, $hero ) );
 
             return ecs_apply_image_loading_attrs( $tag, $is_hero );
@@ -593,4 +601,58 @@ function ecs_fix_instagram_locale( $html, $url, $attr, $post_id ) {
         $html = str_replace( 'locale=en_US', 'locale=en_AU', $html );
     }
     return $html;
+}
+
+// --- PERF-06: Dequeue unused plugin assets (CoBlocks + WooCommerce on non-shop) ---
+
+add_action( 'wp_enqueue_scripts', 'ecs_dequeue_unused_assets', 99 );
+function ecs_dequeue_unused_assets() {
+	if ( is_admin() ) {
+		return;
+	}
+
+	$coblocks = array(
+		'coblocks-frontend',
+		'coblocks-extensions',
+		'coblocks-animation',
+		'coblocks-tiny-swiper',
+		'coblocks-tinyswiper-initializer',
+	);
+	foreach ( $coblocks as $handle ) {
+		wp_dequeue_style( $handle );
+		wp_deregister_style( $handle );
+		wp_dequeue_script( $handle );
+		wp_deregister_script( $handle );
+	}
+
+	if ( ! function_exists( 'is_woocommerce' ) ) {
+		return;
+	}
+
+	if ( is_woocommerce() || is_cart() || is_checkout() || is_account_page() || is_shop() ) {
+		return;
+	}
+
+	$wc_styles = array(
+		'woocommerce-layout',
+		'woocommerce-smallscreen',
+		'woocommerce-general',
+		'woocommerce-inline',
+	);
+	foreach ( $wc_styles as $handle ) {
+		wp_dequeue_style( $handle );
+		wp_deregister_style( $handle );
+	}
+
+	$wc_scripts = array(
+		'wc-add-to-cart',
+		'woocommerce',
+		'wc-order-attribution',
+		'wc-jquery-blockui',
+		'wc-js-cookie',
+	);
+	foreach ( $wc_scripts as $handle ) {
+		wp_dequeue_script( $handle );
+		wp_deregister_script( $handle );
+	}
 }
