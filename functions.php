@@ -674,7 +674,7 @@ function ecs_dequeue_editor_assets() {
 	}
 }
 
-// --- PERF-06: Dequeue unused plugin assets (CoBlocks + WooCommerce on non-shop) ---
+// --- PERF-06: Dequeue unused plugin assets (CoBlocks) ---
 
 add_action( 'wp_enqueue_scripts', 'ecs_dequeue_unused_assets', 99 );
 function ecs_dequeue_unused_assets() {
@@ -696,34 +696,4 @@ function ecs_dequeue_unused_assets() {
 		wp_deregister_script( $handle );
 	}
 
-	if ( ! function_exists( 'is_woocommerce' ) ) {
-		return;
-	}
-
-	if ( is_woocommerce() || is_cart() || is_checkout() || is_account_page() || is_shop() ) {
-		return;
-	}
-
-	$wc_styles = array(
-		'woocommerce-layout',
-		'woocommerce-smallscreen',
-		'woocommerce-general',
-		'woocommerce-inline',
-	);
-	foreach ( $wc_styles as $handle ) {
-		wp_dequeue_style( $handle );
-		wp_deregister_style( $handle );
-	}
-
-	$wc_scripts = array(
-		'wc-add-to-cart',
-		'woocommerce',
-		'wc-order-attribution',
-		'wc-jquery-blockui',
-		'wc-js-cookie',
-	);
-	foreach ( $wc_scripts as $handle ) {
-		wp_dequeue_script( $handle );
-		wp_deregister_script( $handle );
-	}
 }
