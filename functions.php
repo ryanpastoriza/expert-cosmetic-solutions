@@ -198,8 +198,12 @@ add_filter( 'rank_math/opengraph/output/locale', function() {
 // --- PERF-02: Serve WebP sidecars when a .webp file exists (page-cache safe) --------
 
 function ecs_lcp_hero_id() {
-	return (int) apply_filters( 'ecs_lcp_hero_id', 529 );
-	// 529 = current Home (page 11) hero attachment; override via the 'ecs_lcp_hero_id' filter.
+	return (int) apply_filters( 'ecs_lcp_hero_id', 74 );
+	// 74 = homepage hero slideshow slide 1 (Background Slideshow widget, element 9716f5d).
+	// 23 Jun 2026: corrected from a stale, unrelated attachment (529). Only used for the
+	// basename-match in ecs_apply_image_loading_attrs() below — the hero itself is a CSS
+	// background-image (never an <img> tag), so this never actually matches; kept filterable
+	// in case a future hero uses a real <img>. The actual LCP fix is PERF-11 below.
 }
 
 function ecs_lcp_hero_basename() {
@@ -209,43 +213,47 @@ function ecs_lcp_hero_basename() {
 	return $file ? pathinfo( $file, PATHINFO_FILENAME ) : '';
 }
 
-add_action( 'wp_head', 'ecs_preload_lcp_hero', 2 );
-function ecs_preload_lcp_hero() {
-	if ( ! is_front_page() ) {
-		return;
+// --- PERF-11: Discoverable <img> for the hero slideshow's first slide --------------
+// The hero (element 9716f5d) is an Elementor Background Slideshow: Elementor's frontend.js
+// dynamically imports a separate JS chunk on demand, which is the only code that ever builds
+// the slide DOM and sets its background-image inline style. The browser's preload scanner can
+// never discover that URL early -- it doesn't exist in the server-rendered HTML in any form,
+// so a <link rel=preload> alone can't fix it (confirmed via Lighthouse lcp-breakdown-insight:
+// 547ms resourceLoadDelay + 1620ms elementRenderDelay, vs 6ms resourceLoadDuration once the
+// chunk finally requests it -- the bottleneck is JS-execution-gated discovery, not bytes).
+//
+// Fix: render a real <img> for slide 1 server-side, absolutely positioned to fill the
+// container, sitting behind the slideshow (z-index:-1 vs its z-index:0, confirmed in
+// elementor's frontend.css) so Swiper paints over it once it initialises -- same image,
+// so there's no visible flash. Front-page only (matches CR-1's hero-scoping precedent).
+function ecs_hero_slideshow_image_id() {
+	return (int) apply_filters( 'ecs_hero_slideshow_image_id', 74 );
+}
+
+function ecs_inject_hero_slideshow_lcp_image( $html ) {
+	if ( ! is_front_page() || false === strpos( $html, 'elementor-element-9716f5d' ) ) {
+		return $html;
 	}
 
-	$hero_id = ecs_lcp_hero_id();
+	$image_id = ecs_hero_slideshow_image_id();
+	$src      = $image_id ? ecs_url_to_webp( wp_get_attachment_image_url( $image_id, 'full' ) ) : '';
 
-	if ( ! $hero_id ) {
-		return;
+	if ( ! $src ) {
+		return $html;
 	}
 
-	// Use imagesrcset + imagesizes so the browser picks the same source it
-	// selects from the <img> srcset, avoiding a wasted download on desktop.
-	$srcset = wp_get_attachment_image_srcset( $hero_id, 'large' );
-	$sizes  = wp_get_attachment_image_sizes( $hero_id, 'large' );
+	$img = '<img src="' . esc_url( $src ) . '" alt="" fetchpriority="high" loading="eager" decoding="async"'
+		. ' style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:-1;">';
 
-	if ( ! $srcset || ! $sizes ) {
-		// Fallback: single-URL preload for the large size.
-		$hero_url = wp_get_attachment_image_url( $hero_id, 'large' );
-		if ( ! $hero_url ) {
-			return;
-		}
-		echo '<link rel="preload" as="image" href="' . esc_url( ecs_url_to_webp( $hero_url ) ) . '" fetchpriority="high">' . "\n";
-		return;
-	}
+	// Insert right after the hero container's opening tag; element ID is unique on the page.
+	$result = preg_replace(
+		'/(<div\b[^>]*\belementor-element-9716f5d\b[^>]*>)/i',
+		'$1' . $img,
+		$html,
+		1
+	);
 
-	// Rewrite each URL in the srcset to its .webp sidecar when available.
-	$webp_srcset = preg_replace_callback(
-		'/(\S+\.(?:jpe?g|png))(\s+\d+[wx])/i',
-		function ( $m ) {
-			return esc_url( ecs_url_to_webp( $m[1] ) ) . $m[2];
-		},
-		$srcset
-	) ?? $srcset;
-
-	echo '<link rel="preload" as="image" imagesrcset="' . esc_attr( $webp_srcset ) . '" imagesizes="' . esc_attr( $sizes ) . '" fetchpriority="high">' . "\n";
+	return $result ?? $html;
 }
 
 function ecs_upload_path_for_url( $url ) {
@@ -549,6 +557,7 @@ function ecs_optimize_final_html_images( $html ) {
 	}
 
 	$html = ecs_consolidate_faq_schema( $html );
+	$html = ecs_inject_hero_slideshow_lcp_image( $html );
 
 	if ( false === strpos( $html, '<img' ) ) {
 		return $html;
@@ -601,6 +610,68 @@ function ecs_fix_instagram_locale( $html, $url, $attr, $post_id ) {
         $html = str_replace( 'locale=en_US', 'locale=en_AU', $html );
     }
     return $html;
+}
+
+// --- PERF-07: Disable WP emoji (removes s.w.org DNS prefetch + inline detection JS) ---
+// Autoptimize does not remove emoji; handled here instead.
+add_action( 'init', 'ecs_disable_wp_emoji' );
+function ecs_disable_wp_emoji() {
+	remove_action( 'wp_head',             'print_emoji_detection_script', 7 );
+	remove_action( 'wp_print_styles',     'print_emoji_styles' );
+	remove_action( 'admin_print_scripts', 'print_emoji_detection_script' );
+	remove_action( 'admin_print_styles',  'print_emoji_styles' );
+	remove_filter( 'the_content_feed',    'wp_staticize_emoji' );
+	remove_filter( 'comment_text_rss',    'wp_staticize_emoji' );
+	remove_filter( 'wp_mail',             'wp_staticize_emoji_for_email' );
+}
+
+add_filter( 'wp_resource_hints', 'ecs_remove_emoji_dns_prefetch', 10, 2 );
+function ecs_remove_emoji_dns_prefetch( $urls, $relation_type ) {
+	if ( 'dns-prefetch' !== $relation_type ) {
+		return $urls;
+	}
+	$emoji_url = apply_filters( 'emoji_svg_url', 'https://s.w.org/images/core/emoji/12.0.0/svg/' );
+	return array_values( array_diff( $urls, array( $emoji_url ) ) );
+}
+
+// --- PERF-08: Clean up unnecessary WP head tags (RSD, WLW manifest, generator) ----
+add_action( 'init', 'ecs_clean_wp_head' );
+function ecs_clean_wp_head() {
+	remove_action( 'wp_head', 'rsd_link' );
+	remove_action( 'wp_head', 'wlwmanifest_link' );
+	remove_action( 'wp_head', 'wp_generator' );
+	remove_action( 'wp_head', 'wp_shortlink_wp_head', 10 );
+	remove_action( 'wp_head', 'feed_links_extra', 3 );
+}
+
+// --- PERF-09: WPForms — disable global asset load; load only on pages with a form ---
+// WPForms Elementor integration only force-enables global assets inside is_preview_mode()
+// so returning false here is safe on the public frontend.
+add_filter( 'wpforms_global_assets', '__return_false', 20 );
+
+// --- PERF-10: Dequeue wp-components + block-library CSS on frontend ---------------
+// Rank Math's Elementor integration enqueues wp-components for its editor panel;
+// a stale enqueue sometimes bleeds onto the public page. Block-library styles are
+// Gutenberg-specific and unneeded on an Elementor + Hello theme site.
+add_action( 'wp_enqueue_scripts', 'ecs_dequeue_editor_assets', 100 );
+function ecs_dequeue_editor_assets() {
+	if ( is_admin() ) {
+		return;
+	}
+
+	$editor_handles = array(
+		'wp-components',
+		'wp-block-library',
+		'wp-block-library-theme',
+		'classic-theme-styles',
+		'global-styles',
+		'site-health',            // Rank Math Elementor panel also enqueues this
+	);
+
+	foreach ( $editor_handles as $handle ) {
+		wp_dequeue_style( $handle );
+		wp_deregister_style( $handle );
+	}
 }
 
 // --- PERF-06: Dequeue unused plugin assets (CoBlocks + WooCommerce on non-shop) ---
